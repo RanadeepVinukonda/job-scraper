@@ -508,10 +508,9 @@ def verify_url(url):
 # ── Main Run ──────────────────────────────────────────────────────
 
 def run(companies, force_new=False):
+    # Load the persisted URL registry (for de‑duplication) but discard previous jobs
     seen = load_seen()
-    existing = load_jobs()
-
-    all_new = []
+    all_fetched = []
     all_current_urls = set()
 
     key = lambda c: c["name"].lower()
@@ -530,14 +529,16 @@ def run(companies, force_new=False):
                 print()
                 continue
 
+            # Track all URLs seen in this scrape run
             urls = {j["apply_url"] for j in jobs}
             all_current_urls |= urls
 
+            # De‑duplicate against the persisted seen registry
             new_count = 0
             for job in jobs:
                 if force_new or job["apply_url"] not in seen["urls"]:
                     job["discovered_at"] = datetime.now(timezone.utc).isoformat()
-                    all_new.append(job)
+                    all_fetched.append(job)
                     seen["urls"][job["apply_url"]] = time.time()
                     new_count += 1
 
@@ -550,19 +551,17 @@ def run(companies, force_new=False):
             else:
                 print()
 
-    existing.extend(all_new)
-
-    for job in existing:
+    # Mark active flag (all fetched jobs are current)
+    for job in all_fetched:
         job["is_active"] = job["apply_url"] in all_current_urls
 
-    # Keep only active jobs in the final output (inactive jobs are omitted)
-    active_jobs = [job for job in existing if job.get("is_active")]
-    save_jobs(active_jobs)
+    # Write the fresh job list (only active jobs)
+    save_jobs(all_fetched)
     save_seen(seen)
-    print(f"\nDone! {len(all_new)} new jobs, {len(existing)} total\n")
+    print(f"\nDone! {len(all_fetched)} jobs total\n")
     # Write validation report for URL and logo integrity
     report = {
-        "jobs_scraped": len(existing),
+        "jobs_scraped": len(all_fetched),
         "valid_apply_urls": SCRAPE_STATS["valid_apply_urls"],
         "invalid_apply_urls": SCRAPE_STATS["invalid_apply_urls"],
         "valid_logos_primary": SCRAPE_STATS["logo_primary"],
@@ -573,7 +572,7 @@ def run(companies, force_new=False):
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info(f"Validation report written to {report_path}")
 
-    return existing
+    return all_fetched
 
 
 if __name__ == "__main__":
