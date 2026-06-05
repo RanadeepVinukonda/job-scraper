@@ -14,6 +14,7 @@ Output:
 import json, time, re, os, sys, math
 from pathlib import Path
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 DATA_DIR = Path("data")
@@ -100,7 +101,7 @@ def fetch_greenhouse(company):
     board = company["board"]
     name = company["name"]
     domain = company.get("domain", "")
-    url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
+    url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true&per_page=500"
 
     try:
         resp = requests.get(url, timeout=15)
@@ -184,7 +185,7 @@ def fetch_lever(company):
 
 # ── Workday Scraper ───────────────────────────────────────────────
 
-WORKDAY_TIMEOUT = 25
+WORKDAY_TIMEOUT = 5
 WORKDAY_PAGE_SIZE = 20
 WORKDAY_MAX_PAGES = 50
 
@@ -240,9 +241,9 @@ def fetch_workday(company):
                 all_postings.extend(more)
         except Exception:
             pass
-        time.sleep(0.15)
-        if page % 20 == 0:
-            print(f"     ... {page * WORKDAY_PAGE_SIZE}/{total} jobs fetched")
+        if page % 5 == 0:
+            done = min((page + 1) * WORKDAY_PAGE_SIZE, total)
+            print(f"     ... {done}/{total} jobs fetched")
 
     results = []
     for posting in all_postings:
@@ -331,7 +332,6 @@ def verify_url(url):
 def run(companies, force_new=False):
     seen = load_seen()
     existing = load_jobs()
-    existing_by_url = {j["apply_url"]: j for j in existing}
 
     all_new = []
     all_current_urls = set()
@@ -340,51 +340,42 @@ def run(companies, force_new=False):
 
     print(f"scraping {len(companies)} companies...\n")
 
-    for i, company in enumerate(companies, 1):
-        is_first = key(company) not in seen.get("companies_seen", []) and not force_new
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        fut_map = {pool.submit(fetch_company_jobs, c): c for c in companies}
 
-        jobs = fetch_company_jobs(company)
-        print(f"  [{i}/{len(companies)}] {company['name']:20s} {company.get('ats','?'):12s} {len(jobs):4d} jobs", end="")
+        for i, fut in enumerate(as_completed(fut_map), 1):
+            company = fut_map[fut]
+            jobs = fut.result()
+            print(f"  [{i}/{len(companies)}] {company['name']:20s} {company.get('ats','?'):12s} {len(jobs):4d} jobs", end="")
 
-        if not jobs:
-            print()
-            continue
+            if not jobs:
+                print()
+                continue
 
-        urls = {j["apply_url"] for j in jobs}
-        all_current_urls |= urls
+            urls = {j["apply_url"] for j in jobs}
+            all_current_urls |= urls
 
-        new_count = 0
-        for job in jobs:
-            if force_new or job["apply_url"] not in seen["urls"]:
-                job["discovered_at"] = datetime.now(timezone.utc).isoformat()
-                all_new.append(job)
-                seen["urls"][job["apply_url"]] = time.time()
-                new_count += 1
+            new_count = 0
+            for job in jobs:
+                if force_new or job["apply_url"] not in seen["urls"]:
+                    job["discovered_at"] = datetime.now(timezone.utc).isoformat()
+                    all_new.append(job)
+                    seen["urls"][job["apply_url"]] = time.time()
+                    new_count += 1
 
-        if is_first:
-            seen.setdefault("companies_seen", []).append(key(company))
-            print(f"  (first scrape - archived)")
-        elif new_count > 0:
-            print(f"  ({new_count} new)")
-        else:
-            print()
-
-        time.sleep(0.3)
+            is_first = key(company) not in seen.get("companies_seen", [])
+            if is_first and not force_new:
+                seen.setdefault("companies_seen", []).append(key(company))
+                print(f"  (first scrape - archived)")
+            elif new_count > 0:
+                print(f"  ({new_count} new)")
+            else:
+                print()
 
     existing.extend(all_new)
 
     for job in existing:
         job["is_active"] = job["apply_url"] in all_current_urls
-
-    suspected = [j for j in existing if not j.get("is_active")]
-    if suspected:
-        print(f"\nVerifying {len(suspected)} removed jobs...")
-        recovered = 0
-        for job in suspected:
-            job["is_active"] = verify_url(job["apply_url"])
-            if job["is_active"]:
-                recovered += 1
-        print(f"  {recovered} still live (recovered), {len(suspected) - recovered} confirmed dead")
 
     save_jobs(existing)
     save_seen(seen)
