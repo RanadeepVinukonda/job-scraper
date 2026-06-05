@@ -99,12 +99,23 @@ def validate_image_url(url: str) -> bool:
 def get_logo_url(domain: str) -> tuple[str, str]:
     """Return a reliable logo URL for the given domain.
     Returns a tuple (url, source) where source is 'primary', 'fallback' or 'default'.
+    If LOGODEV_PUBLISHABLE_KEY and LOGODEV_SECRET_KEY environment variables are set,
+    they are appended as query parameters to the primary logo.dev request.
     """
     if not domain:
         return DEFAULT_LOGO, "default"
-    primary = f"https://img.logo.dev/{domain}"
+    # Base img.logo.dev URL
+    primary_base = f"https://img.logo.dev/{domain}"
+    # Append auth keys if they exist in the environment (no hard‑coded secrets)
+    pk = os.getenv("LOGODEV_PUBLISHABLE_KEY")
+    sk = os.getenv("LOGODEV_SECRET_KEY")
+    if pk and sk:
+        primary = f"{primary_base}?pk={pk}&sk={sk}"
+    else:
+        primary = primary_base
     if validate_image_url(primary):
         return primary, "primary"
+    # Fallback to Google favicon service
     fallback = f"https://www.google.com/s2/favicons?domain={domain}&sz=128"
     if validate_image_url(fallback):
         return fallback, "fallback"
