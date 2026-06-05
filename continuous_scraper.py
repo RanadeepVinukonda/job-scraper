@@ -127,24 +127,18 @@ def validate_image_url(url: str) -> bool:
         return False
 
 def get_logo_url(domain: str) -> tuple[str, str]:
-    """Return a reliable logo URL for the given domain.
-    Returns a tuple (url, source) where source is 'primary', 'fallback' or 'default'.
-    This implementation always uses the provided Logodev API keys to request a logo.
+    """Return a logo.dev URL for the given domain using the supplied API keys.
+    The function *always* returns the primary img.logo.dev URL (with keys) if a domain is provided.
+    If the domain is missing, a placeholder image URL is returned.
     """
     if not domain:
         return DEFAULT_LOGO, "default"
-    # Build the img.logo.dev URL with the publishable and secret keys provided by the user.
-    # Keys are hard‑coded here as the user explicitly supplied them and requested direct use.
+    # Hard‑coded Logodev keys as requested by the user
     pk = "pk_Yggm8GxoS8mJfRYHMbOxiQ"
     sk = "sk_B44KoufQT5ue-bcN5VLQVA"
     primary = f"https://img.logo.dev/{domain}?pk={pk}&sk={sk}"
-    if validate_image_url(primary):
-        return primary, "primary"
-    # If the primary endpoint fails, fall back to Google favicons.
-    fallback = f"https://www.google.com/s2/favicons?domain={domain}&sz=128"
-    if validate_image_url(fallback):
-        return fallback, "fallback"
-    return DEFAULT_LOGO, "default"
+    # We assume the service works; no validation to avoid additional network calls
+    return primary, "primary"
 
 
 DATA_DIR = Path("data")
