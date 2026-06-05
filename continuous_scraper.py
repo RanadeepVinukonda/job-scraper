@@ -97,9 +97,8 @@ def fetch_company_jobs(company):
             "department": departments[0]["name"] if departments else "General",
             "location": job.get("location", {}).get("name", "Remote"),
             "employment_type": infer_employment_type(job.get("title", ""), job.get("content", "")),
-            "apply_url": job.get("absolute_url", ""),
-            "boards_url": f"https://boards.greenhouse.io/{board}/jobs/{gh_jid}" if gh_jid else "",
-            "source": "greenhouse",
+            "apply_url": f"https://boards.greenhouse.io/{board}/jobs/{gh_jid}" if gh_jid else job.get("absolute_url", ""),
+            "source": "company_careers_page",
             "ats": "Greenhouse",
             "logo_url": logo_url,
         })
@@ -123,10 +122,19 @@ def load_jobs():
     return []
 
 
+OUTPUT_FIELDS = [
+    "id", "company_name", "company_domain", "career_page", "job_title",
+    "department", "location", "employment_type", "apply_url",
+    "source", "ats", "logo_url",
+]
+
 def save_jobs(jobs):
+    cleaned = []
     for idx, job in enumerate(jobs, 1):
         job["id"] = idx
-    JOBS_FILE.write_text(json.dumps(jobs, indent=2, ensure_ascii=False), encoding="utf-8")
+        entry = {k: job.get(k, "") for k in OUTPUT_FIELDS}
+        cleaned.append(entry)
+    JOBS_FILE.write_text(json.dumps(cleaned, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def verify_url(url):
