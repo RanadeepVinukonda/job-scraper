@@ -60,22 +60,29 @@ BROWSER_HEADERS = {
 }
 
 def follow_redirects(url: str) -> str | None:
-    """Return final URL after following redirects, or None on failure.
-    Handles 403 responses by returning the original URL (the link is still usable).
+    """Return the final destination URL, or the original URL if the request fails.
+    * Uses browser‑like headers to avoid 403 blocks.
+    * On 403, 404, 500 or a timeout we keep the raw URL (still a usable link).
+    * Logs non‑200 responses at INFO level to avoid noisy warnings.
     """
     try:
-        # Short pause to be gentle on the server and avoid rate‑limit
+        # Gentle pause to stay under any rate‑limit
         time.sleep(0.05)
-        resp = requests.get(url, allow_redirects=True, timeout=10, headers=BROWSER_HEADERS)
+        # Shorter timeout to prevent long stalls on dead URLs
+        resp = requests.get(url, allow_redirects=True, timeout=5, headers=BROWSER_HEADERS)
         if resp.status_code == 200:
             return resp.url
-        elif resp.status_code == 403:
-            # Greenhouse blocks non‑browser agents; keep the raw URL for the user.
-            logger.info(f"Received 403 for {url}, keeping raw URL")
+        # Keep the original URL for known failure codes
+        if resp.status_code in (403, 404, 500):
+            logger.info(f"Received {resp.status_code} for {url}, keeping raw URL")
             return url
-        else:
-            logger.warning(f"URL {url} returned status {resp.status_code}")
-            return None
+        # Any other unexpected status – treat as failure
+        logger.warning(f"URL {url} returned unexpected status {resp.status_code}")
+        return None
+    except requests.exceptions.ReadTimeout:
+        # Timeout – assume the URL is still usable and keep it
+        logger.info(f"Read timeout for {url}, keeping raw URL")
+        return url
     except Exception as e:
         logger.warning(f"Error fetching URL {url}: {e}")
         return None
