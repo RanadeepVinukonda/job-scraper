@@ -84,7 +84,16 @@ with t1:
 
     st.subheader(f"Jobs ({len(jobs)})")
     # Show a limited number of job cards by default for performance; user can adjust
-    max_display = st.slider("Show up to N jobs", min_value=1, max_value=len(jobs), value=min(20, len(jobs)), step=10)
+    max_jobs = len(jobs)
+    # Choose a step that fits the range: use 1 for small lists, 10 otherwise
+    step = 1 if max_jobs <= 20 else 10
+    max_display = st.slider(
+        "Show up to N jobs",
+        min_value=1,
+        max_value=max_jobs,
+        value=min(20, max_jobs),
+        step=step,
+    )
     for job in jobs[:max_display]:
         with st.container():
             col_img, col_info = st.columns([1, 8])
