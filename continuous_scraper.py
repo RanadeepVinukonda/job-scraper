@@ -95,23 +95,26 @@ def normalize_apply_url(raw_url: str, base_url: str | None = None) -> str | None
     * Follows redirects and returns the final destination
     Returns None if the URL is invalid or unreachable.
     """
+    # Basic validation and normalization – no network request.
     if not raw_url or not isinstance(raw_url, str):
         return None
     raw_url = raw_url.strip()
+    # Handle protocol‑relative URLs (e.g. //example.com)
     if raw_url.startswith("//"):
         raw_url = "https:" + raw_url
+    # Resolve relative URLs against a base page when supplied
     if base_url and raw_url.startswith("/"):
         raw_url = urllib.parse.urljoin(base_url, raw_url)
-    # Ensure scheme present
+    # Ensure a scheme is present; default to https
     parsed = urllib.parse.urlparse(raw_url)
     if not parsed.scheme:
         raw_url = "https://" + raw_url
-        parsed = urllib.parse.urlparse(raw_url)
+    # Validate final URL format; if invalid we drop the job
     if not is_valid_url(raw_url):
         logger.warning(f"Invalid URL format: {raw_url}")
         return None
-    final = follow_redirects(raw_url)
-    return final
+    # Return the cleaned URL – we deliberately skip remote follow‑redirects to avoid stalls
+    return raw_url
 
 def validate_image_url(url: str) -> bool:
     """Check that a URL returns a 200 response with an image content type."""
@@ -558,9 +561,10 @@ def run(companies, force_new=False):
     for job in existing:
         job["is_active"] = job["apply_url"] in all_current_urls
 
-    save_jobs(existing)
+    # Keep only active jobs in the final output (inactive jobs are omitted)
+    active_jobs = [job for job in existing if job.get("is_active")]
+    save_jobs(active_jobs)
     save_seen(seen)
-
     print(f"\nDone! {len(all_new)} new jobs, {len(existing)} total\n")
     # Write validation report for URL and logo integrity
     report = {
