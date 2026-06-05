@@ -74,10 +74,12 @@ with t1:
     st.dataframe(pd.DataFrame(active), hide_index=True, use_container_width=True)
 
 with t2:
+    count = st.number_input("Number of jobs to download", min_value=1, max_value=len(active), value=len(active))
+    subset = active[:count]
     col_j, col_c = st.columns(2)
-    col_j.download_button("📥 Download JSON", json.dumps(active, indent=2, ensure_ascii=False),
+    col_j.download_button("📥 Download JSON", json.dumps(subset, indent=2, ensure_ascii=False),
                           "job_listings.json", "application/json", use_container_width=True)
-    col_c.download_button("📥 Download CSV", to_csv_string(active),
+    col_c.download_button("📥 Download CSV", to_csv_string(subset),
                           "job_listings.csv", "text/csv", use_container_width=True)
     st.subheader("Preview (first 10)")
     st.code(json.dumps(active[:10], indent=2), language="json")
