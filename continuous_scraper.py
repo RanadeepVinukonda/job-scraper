@@ -306,7 +306,7 @@ def load_jobs():
 OUTPUT_FIELDS = [
     "id", "company_name", "company_domain", "career_page", "job_title",
     "department", "location", "employment_type", "apply_url",
-    "source", "ats", "logo_url",
+    "source", "ats",
 ]
 
 
