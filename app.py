@@ -1,6 +1,7 @@
 import streamlit as st
-import json, csv, io
+import json, csv, io, time
 from pathlib import Path
+from datetime import datetime, timezone
 from collections import Counter
 import pandas as pd
 from continuous_scraper import COMPANIES, DEMO_COMPANIES, run, load_jobs
@@ -19,7 +20,7 @@ def to_csv_string(jobs):
 # ── UI ───────────────────────────────────────────────────────────────
 
 st.title("📋 Job Scraper")
-st.markdown("Scrapes job listings from company career pages. Data is updated every 6 hours via GitHub Actions.")
+st.markdown("Scrapes job listings from company career pages. Data is updated hourly via GitHub Actions.")
 
 st.sidebar.markdown("### About")
 st.sidebar.info(
@@ -48,7 +49,16 @@ if not jobs:
 active = [j for j in jobs if j.get("is_active", True)]
 inactive = [j for j in jobs if not j.get("is_active", True)]
 
-st.success(f"✅ **{len(active)} active jobs** across {len(set(j['company_name'] for j in active))} companies")
+# ── last updated indicator ──────────────────────────────────────
+now = time.time()
+mtime = JOBS_FILE.stat().st_mtime
+elapsed = now - mtime
+companies_count = len(set(j["company_name"] for j in active))
+if elapsed < 7200:
+    st.success(f"🔄 **Updated {int(elapsed // 60)} min ago** — {len(active)} active jobs across {companies_count} companies")
+else:
+    updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%b %d, %Y at %H:%M UTC")
+    st.info(f"📅 **{updated_at}** — {len(active)} active jobs across {companies_count} companies")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Active", len(active))
