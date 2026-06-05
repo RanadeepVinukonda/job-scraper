@@ -510,6 +510,8 @@ def verify_url(url):
 def run(companies, force_new=False):
     # Load the persisted URL registry (for de‑duplication) but discard previous jobs
     seen = load_seen()
+    # Reset stored URLs to start fresh each run (avoid suppressing all jobs due to prior history)
+    seen["urls"] = {}
     all_fetched = []
     all_current_urls = set()
 
