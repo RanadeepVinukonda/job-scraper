@@ -12,10 +12,104 @@ Output:
 """
 
 import json, time, re, os, sys, math
+import logging
+import urllib.parse
+
 from pathlib import Path
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+
+# Configure basic logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
+
+# Global scrape statistics for validation reporting
+SCRAPE_STATS = {
+    "total_raw_jobs": 0,
+    "invalid_apply_urls": 0,
+    "valid_apply_urls": 0,
+    "logo_primary": 0,
+    "logo_fallback": 0,
+    "logo_default": 0,
+}
+
+# -----------------------------------
+# Helper utilities for URL normalization and logo handling
+# -----------------------------------
+DEFAULT_LOGO = "https://via.placeholder.com/100?text=No+Logo"
+
+def is_valid_url(url: str) -> bool:
+    """Basic validation that the URL has a proper scheme and netloc."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    except Exception:
+        return False
+
+def follow_redirects(url: str) -> str | None:
+    """Return final URL after following redirects, or None on failure."""
+    try:
+        resp = requests.get(url, allow_redirects=True, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200:
+            return resp.url
+        else:
+            logger.warning(f"URL {url} returned status {resp.status_code}")
+            return None
+    except Exception as e:
+        logger.warning(f"Error fetching URL {url}: {e}")
+        return None
+
+def normalize_apply_url(raw_url: str, base_url: str | None = None) -> str | None:
+    """Normalize and verify an apply URL.
+    * Handles protocol‑relative URLs (//example.com)
+    * Resolves relative URLs using base_url
+    * Ensures a proper scheme
+    * Follows redirects and returns the final destination
+    Returns None if the URL is invalid or unreachable.
+    """
+    if not raw_url or not isinstance(raw_url, str):
+        return None
+    raw_url = raw_url.strip()
+    if raw_url.startswith("//"):
+        raw_url = "https:" + raw_url
+    if base_url and raw_url.startswith("/"):
+        raw_url = urllib.parse.urljoin(base_url, raw_url)
+    # Ensure scheme present
+    parsed = urllib.parse.urlparse(raw_url)
+    if not parsed.scheme:
+        raw_url = "https://" + raw_url
+        parsed = urllib.parse.urlparse(raw_url)
+    if not is_valid_url(raw_url):
+        logger.warning(f"Invalid URL format: {raw_url}")
+        return None
+    final = follow_redirects(raw_url)
+    return final
+
+def validate_image_url(url: str) -> bool:
+    """Check that a URL returns a 200 response with an image content type."""
+    try:
+        head = requests.head(url, timeout=10, allow_redirects=True)
+        ct = head.headers.get("Content-Type", "")
+        return head.status_code == 200 and ct.startswith("image/")
+    except Exception as e:
+        logger.info(f"Error checking logo URL {url}: {e}")
+        return False
+
+def get_logo_url(domain: str) -> tuple[str, str]:
+    """Return a reliable logo URL for the given domain.
+    Returns a tuple (url, source) where source is 'primary', 'fallback' or 'default'.
+    """
+    if not domain:
+        return DEFAULT_LOGO, "default"
+    primary = f"https://img.logo.dev/{domain}"
+    if validate_image_url(primary):
+        return primary, "primary"
+    fallback = f"https://www.google.com/s2/favicons?domain={domain}&sz=128"
+    if validate_image_url(fallback):
+        return fallback, "fallback"
+    return DEFAULT_LOGO, "default"
+
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -114,11 +208,22 @@ def fetch_greenhouse(company):
     jobs_data = resp.json().get("jobs", [])
     results = []
     career_page = f"https://{domain}/careers" if domain else ""
-    logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
+    # Resolve logo via reliable services
+    logo_url, _ = get_logo_url(domain)
 
     for job in jobs_data:
+        # Count raw job entry for stats
+        SCRAPE_STATS["total_raw_jobs"] += 1
         departments = job.get("departments", [])
         gh_jid = job.get("id")
+        # Build raw apply URL first, then normalize/validate it
+        raw_apply = f"https://boards.greenhouse.io/{board}/jobs/{gh_jid}" if gh_jid else job.get("absolute_url", "")
+        apply_url = normalize_apply_url(raw_apply, base_url=career_page)
+        if not apply_url:
+            SCRAPE_STATS["invalid_apply_urls"] += 1
+            continue
+        # Successful apply URL
+        SCRAPE_STATS["valid_apply_urls"] += 1
         results.append({
             "company_name": job.get("company_name") or name,
             "company_domain": domain,
@@ -127,11 +232,19 @@ def fetch_greenhouse(company):
             "department": departments[0]["name"] if departments else "General",
             "location": job.get("location", {}).get("name", "Remote"),
             "employment_type": infer_employment_type(job.get("title", ""), job.get("content", "")),
-            "apply_url": f"https://boards.greenhouse.io/{board}/jobs/{gh_jid}" if gh_jid else job.get("absolute_url", ""),
+            "apply_url": apply_url,
             "source": "company_careers_page",
             "ats": "Greenhouse",
             "logo_url": logo_url,
         })
+        # Increment logo source stats based on the source used for this company
+        # (logo_url is already resolved via get_logo_url) – we infer source by pattern
+        if logo_url.startswith("https://img.logo.dev"):
+            SCRAPE_STATS["logo_primary"] += 1
+        elif logo_url.startswith("https://www.google.com/s2/favicons"):
+            SCRAPE_STATS["logo_fallback"] += 1
+        else:
+            SCRAPE_STATS["logo_default"] += 1
 
     return results
 
@@ -162,10 +275,21 @@ def fetch_lever(company):
 
     results = []
     career_page = f"https://{domain}/careers" if domain else ""
-    logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
+    # Resolve logo via reliable services, capture source
+    logo_url, logo_source = get_logo_url(domain)
 
     for posting in postings:
+        # Count raw posting for stats
+        SCRAPE_STATS["total_raw_jobs"] += 1
         categories = posting.get("categories", {}) or {}
+        # Normalize apply URL
+        raw_apply = posting.get("hostedUrl", "")
+        apply_url = normalize_apply_url(raw_apply, base_url=career_page)
+        if not apply_url:
+            SCRAPE_STATS["invalid_apply_urls"] += 1
+            continue
+        # Successful apply URL
+        SCRAPE_STATS["valid_apply_urls"] += 1
         results.append({
             "company_name": name,
             "company_domain": domain,
@@ -174,11 +298,18 @@ def fetch_lever(company):
             "department": categories.get("team", "General"),
             "location": categories.get("location", "Remote"),
             "employment_type": infer_employment_type(posting.get("text", ""), categories.get("commitment", "")),
-            "apply_url": posting.get("hostedUrl", ""),
+            "apply_url": apply_url,
             "source": "company_careers_page",
             "ats": "Lever",
             "logo_url": logo_url,
         })
+        # Increment logo source stats based on the source used for this company
+        if logo_source == "primary":
+            SCRAPE_STATS["logo_primary"] += 1
+        elif logo_source == "fallback":
+            SCRAPE_STATS["logo_fallback"] += 1
+        else:
+            SCRAPE_STATS["logo_default"] += 1
 
     return results
 
@@ -216,7 +347,8 @@ def fetch_workday(company):
     }
 
     career_page = f"https://{domain}/careers" if domain else ""
-    logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
+    # Resolve logo via reliable services, capture source
+    logo_url, logo_source = get_logo_url(domain)
 
     try:
         resp = requests.post(api_url, json={"limit": WORKDAY_PAGE_SIZE, "offset": 0, "searchText": "", "appliedFacets": {}}, headers=headers, timeout=WORKDAY_TIMEOUT)
@@ -247,10 +379,19 @@ def fetch_workday(company):
 
     results = []
     for posting in all_postings:
+        # Count raw posting for stats
+        SCRAPE_STATS["total_raw_jobs"] += 1
         ext_path = posting.get("externalPath", "")
         bullet = posting.get("bulletFields", []) or []
         department = _wd_extract_department(bullet)
 
+        # Resolve apply URL for Workday postings
+        raw_apply = _wd_apply_url(company, ext_path) if ext_path else ""
+        apply_url = normalize_apply_url(raw_apply, base_url=career_page)
+        if not apply_url:
+            SCRAPE_STATS["invalid_apply_urls"] += 1
+            continue
+        SCRAPE_STATS["valid_apply_urls"] += 1
         results.append({
             "company_name": name,
             "company_domain": domain,
@@ -259,11 +400,18 @@ def fetch_workday(company):
             "department": department,
             "location": posting.get("locationsText", "Remote"),
             "employment_type": infer_employment_type(posting.get("title", ""), " ".join(bullet)),
-            "apply_url": _wd_apply_url(company, ext_path) if ext_path else "",
+            "apply_url": apply_url,
             "source": "company_careers_page",
             "ats": "Workday",
             "logo_url": logo_url,
         })
+        # Increment logo source stats based on the source used for this company
+        if logo_source == "primary":
+            SCRAPE_STATS["logo_primary"] += 1
+        elif logo_source == "fallback":
+            SCRAPE_STATS["logo_fallback"] += 1
+        else:
+            SCRAPE_STATS["logo_default"] += 1
 
     return results
 
@@ -381,6 +529,18 @@ def run(companies, force_new=False):
     save_seen(seen)
 
     print(f"\nDone! {len(all_new)} new jobs, {len(existing)} total\n")
+    # Write validation report for URL and logo integrity
+    report = {
+        "jobs_scraped": len(existing),
+        "valid_apply_urls": SCRAPE_STATS["valid_apply_urls"],
+        "invalid_apply_urls": SCRAPE_STATS["invalid_apply_urls"],
+        "valid_logos_primary": SCRAPE_STATS["logo_primary"],
+        "valid_logos_fallback": SCRAPE_STATS["logo_fallback"],
+        "valid_logos_default": SCRAPE_STATS["logo_default"],
+    }
+    report_path = DATA_DIR / "validation_report.json"
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info(f"Validation report written to {report_path}")
 
     return existing
 

@@ -83,16 +83,22 @@ with t1:
     st.bar_chart(pd.DataFrame([{"Company": k, "Jobs": v} for k, v in co]).set_index("Company"))
 
     st.subheader(f"Jobs ({len(jobs)})")
-    df_jobs = pd.DataFrame(jobs)
-    if not df_jobs.empty:
-        st.dataframe(
-            df_jobs,
-            column_config={
-                "apply_url": st.column_config.LinkColumn("Apply URL"),
-                "logo_url": st.column_config.LinkColumn("Logo URL"),
-            },
-            hide_index=True, use_container_width=True,
-        )
+    # Show a limited number of job cards by default for performance; user can adjust
+    max_display = st.slider("Show up to N jobs", min_value=1, max_value=len(jobs), value=min(20, len(jobs)), step=10)
+    for job in jobs[:max_display]:
+        with st.container():
+            col_img, col_info = st.columns([1, 8])
+            with col_img:
+                # Render logo; Streamlit will handle missing/broken URLs gracefully
+                st.image(job.get("logo_url", ""), width=80)
+            with col_info:
+                st.markdown(f"**{job.get('company_name', '')}** – {job.get('job_title', '')}")
+                st.markdown(f"{job.get('location', '')} • {job.get('employment_type', '')}")
+                # Streamlit >=1.28 provides link_button; fallback to markdown link if unavailable
+                try:
+                    st.link_button(label="Apply", url=job.get('apply_url', ''), type="primary")
+                except AttributeError:
+                    st.markdown(f"[Apply]({job.get('apply_url', '')})")
 
 with t2:
     count = st.number_input("Number of jobs to download", min_value=1, max_value=len(jobs), value=len(jobs))
