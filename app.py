@@ -10,12 +10,14 @@ st.set_page_config(page_title="Job Scraper", page_icon="📋", layout="wide")
 
 JOBS_FILE = Path("data") / "job_listings.json"
 
+
 def to_csv_string(jobs):
     if not jobs: return ""
     out = io.StringIO()
     w = csv.DictWriter(out, fieldnames=list(jobs[0].keys()))
     w.writeheader(); w.writerows(jobs)
     return out.getvalue()
+
 
 # ── UI ───────────────────────────────────────────────────────────────
 
@@ -26,7 +28,7 @@ st.sidebar.markdown("### About")
 st.sidebar.info(
     "This scraper polls **27 companies** on a schedule.\n"
     "New jobs are detected by comparing `apply_url` against a registry.\n"
-    "Removed jobs are marked inactive (not deleted)."
+    "Removed jobs are verified via HEAD request (recovered or confirmed dead)."
 )
 
 jobs = load_jobs()
@@ -49,47 +51,62 @@ if not jobs:
 active = [j for j in jobs if j.get("is_active", True)]
 inactive = [j for j in jobs if not j.get("is_active", True)]
 
-# ── last updated indicator ──────────────────────────────────────
+# ── freshness banner ─────────────────────────────────────────────
 now = time.time()
 mtime = JOBS_FILE.stat().st_mtime
 elapsed = now - mtime
-companies_count = len(set(j["company_name"] for j in active))
+companies_count = len(set(j["company_name"] for j in jobs))
 if elapsed < 7200:
-    st.success(f"🔄 **Updated {int(elapsed // 60)} min ago** — {len(active)} active jobs across {companies_count} companies")
+    st.success(f"🔄 **Updated {int(elapsed // 60)} min ago** — {len(active)} active, {len(inactive)} dead across {companies_count} companies")
 else:
     updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%b %d, %Y at %H:%M UTC")
-    st.info(f"📅 **{updated_at}** — {len(active)} active jobs across {companies_count} companies")
+    st.info(f"📅 **{updated_at}** — {len(active)} active, {len(inactive)} dead across {companies_count} companies")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Active", len(active))
-col2.metric("Inactive (removed)", len(inactive))
-col3.metric("Companies", len(set(j["company_name"] for j in active)))
+col2.metric("Dead (removed)", len(inactive))
+col3.metric("Companies", companies_count)
 col4.metric("Last update", jobs[0].get("discovered_at","—")[:10] if jobs else "—")
+
+# ── status filter ────────────────────────────────────────────────
+status_filter = st.sidebar.radio("Show jobs", ["Active", "Dead", "All"], horizontal=True)
+if status_filter == "Active":
+    display = active
+elif status_filter == "Dead":
+    display = inactive
+else:
+    display = jobs
 
 t1, t2 = st.tabs(["📊 Dashboard", "📥 Download"])
 
 with t1:
     st.subheader("Employment Type")
-    et = Counter(j["employment_type"] for j in active)
+    et = Counter(j["employment_type"] for j in display)
     df = pd.DataFrame([{"Type":k,"Count":v} for k,v in et.most_common()])
     ca, cb = st.columns([1,2])
     ca.dataframe(df, hide_index=True, use_container_width=True)
     cb.bar_chart(df.set_index("Type"))
 
     st.subheader("Jobs by Company (top 15)")
-    co = Counter(j["company_name"] for j in active).most_common(15)
+    co = Counter(j["company_name"] for j in display).most_common(15)
     st.bar_chart(pd.DataFrame([{"Company":k,"Jobs":v} for k,v in co]).set_index("Company"))
 
-    st.subheader("All Jobs")
-    st.dataframe(pd.DataFrame(active), hide_index=True, use_container_width=True)
+    st.subheader(f"Jobs ({len(display)})")
+    df_jobs = pd.DataFrame(display)
+    if not df_jobs.empty:
+        st.dataframe(
+            df_jobs,
+            column_config={"apply_url": st.column_config.LinkColumn("Apply URL")},
+            hide_index=True, use_container_width=True,
+        )
 
 with t2:
-    count = st.number_input("Number of jobs to download", min_value=1, max_value=len(active), value=len(active))
-    subset = active[:count]
+    count = st.number_input("Number of jobs to download", min_value=1, max_value=len(display), value=len(display))
+    subset = display[:count]
     col_j, col_c = st.columns(2)
     col_j.download_button("📥 Download JSON", json.dumps(subset, indent=2, ensure_ascii=False),
                           "job_listings.json", "application/json", use_container_width=True)
     col_c.download_button("📥 Download CSV", to_csv_string(subset),
                           "job_listings.csv", "text/csv", use_container_width=True)
     st.subheader("Preview (first 10)")
-    st.code(json.dumps(active[:10], indent=2), language="json")
+    st.code(json.dumps(display[:10], indent=2), language="json")

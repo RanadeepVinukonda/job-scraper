@@ -127,6 +127,14 @@ def save_jobs(jobs):
     JOBS_FILE.write_text(json.dumps(jobs, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def verify_url(url):
+    try:
+        resp = requests.head(url, timeout=10, allow_redirects=True)
+        return resp.status_code == 200
+    except:
+        return False
+
+
 def run(companies, force_new=False):
     seen = load_seen()
     existing = load_jobs()
@@ -172,9 +180,20 @@ def run(companies, force_new=False):
     # Merge: keep existing + add new
     existing.extend(all_new)
 
-    # Mark inactive: jobs whose URL no longer appears
+    # Step 1 — mark active/inactive by API presence
     for job in existing:
         job["is_active"] = job["apply_url"] in all_current_urls
+
+    # Step 2 — HEAD-check suspected-dead jobs to confirm
+    suspected = [j for j in existing if not j.get("is_active")]
+    if suspected:
+        print(f"\nVerifying {len(suspected)} removed jobs...")
+        recovered = 0
+        for job in suspected:
+            job["is_active"] = verify_url(job["apply_url"])
+            if job["is_active"]:
+                recovered += 1
+        print(f"  {recovered} still live (recovered), {len(suspected) - recovered} confirmed dead")
 
     save_jobs(existing)
     save_seen(seen)
