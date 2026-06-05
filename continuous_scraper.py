@@ -107,24 +107,24 @@ def fetch_company_jobs(company):
 
 def load_seen():
     if SEEN_FILE.exists():
-        return json.loads(SEEN_FILE.read_text())
+        return json.loads(SEEN_FILE.read_text(encoding="utf-8"))
     return {"urls": {}, "companies_seen": []}
 
 
 def save_seen(seen):
-    SEEN_FILE.write_text(json.dumps(seen, indent=2, ensure_ascii=False))
+    SEEN_FILE.write_text(json.dumps(seen, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def load_jobs():
     if JOBS_FILE.exists():
-        return json.loads(JOBS_FILE.read_text())
+        return json.loads(JOBS_FILE.read_text(encoding="utf-8"))
     return []
 
 
 def save_jobs(jobs):
     for idx, job in enumerate(jobs, 1):
         job["id"] = idx
-    JOBS_FILE.write_text(json.dumps(jobs, indent=2, ensure_ascii=False))
+    JOBS_FILE.write_text(json.dumps(jobs, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def run(companies, force_new=False):
