@@ -4,11 +4,13 @@ from pathlib import Path
 from datetime import datetime, timezone
 from collections import Counter
 import pandas as pd
-from continuous_scraper import COMPANIES, DEMO_COMPANIES, run, load_jobs
+from continuous_scraper import ALL_COMPANIES, DEMO_COMPANIES, run, load_jobs
 
 st.set_page_config(page_title="Job Scraper", page_icon="📋", layout="wide")
 
 JOBS_FILE = Path("data") / "job_listings.json"
+
+ALL_COMPANIES_FLAT = ALL_COMPANIES
 
 
 def to_csv_string(jobs):
@@ -19,15 +21,16 @@ def to_csv_string(jobs):
     return out.getvalue()
 
 
-# ── UI ───────────────────────────────────────────────────────────────
-
 st.title("📋 Job Scraper")
-st.markdown("Scrapes job listings from company career pages. Data is updated hourly via GitHub Actions.")
+st.markdown("Scrapes job listings from company career pages across **Greenhouse · Lever · Workday**. Data is updated hourly via GitHub Actions.")
 
 st.sidebar.markdown("### About")
 st.sidebar.info(
-    "This scraper polls **27 companies** on a schedule.\n"
-    "New jobs are detected by comparing `apply_url` against a registry.\n"
+    f"Multi-ATS scraper polling **{len(ALL_COMPANIES_FLAT)} companies** "
+    f"({sum(1 for c in ALL_COMPANIES_FLAT if c['ats']=='greenhouse')} GH, "
+    f"{sum(1 for c in ALL_COMPANIES_FLAT if c['ats']=='lever')} Lever, "
+    f"{sum(1 for c in ALL_COMPANIES_FLAT if c['ats']=='workday')} Workday) on a schedule.\n"
+    "New jobs detected by `apply_url` dedup.\n"
 )
 
 jobs = load_jobs()
@@ -36,36 +39,40 @@ if not jobs:
     st.warning("No data yet. Run `python continuous_scraper.py --demo` to generate sample data.")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🚀 Run demo scrape (3 companies)"):
+        if st.button("Run demo scrape (6 companies, 3 ATS)"):
             with st.spinner("Scraping..."):
                 run(DEMO_COMPANIES, force_new=True)
                 st.rerun()
     with col2:
-        if st.button("🚀 Run full scrape (all 27)"):
+        if st.button("Run full scrape (all companies)"):
             with st.spinner("Scraping..."):
-                run(COMPANIES, force_new=True)
+                run(ALL_COMPANIES_FLAT, force_new=True)
                 st.rerun()
     st.stop()
 
-# ── freshness banner ─────────────────────────────────────────────
 now = time.time()
 mtime = JOBS_FILE.stat().st_mtime
 elapsed = now - mtime
 companies_count = len(set(j["company_name"] for j in jobs))
+ats_counts = Counter(j.get("ats","?") for j in jobs)
 if elapsed < 7200:
-    st.success(f"🔄 **Updated {int(elapsed // 60)} min ago** — {len(jobs)} jobs across {companies_count} companies")
+    st.success(f"Updated {int(elapsed // 60)} min ago — {len(jobs)} jobs across {companies_count} companies")
 else:
     updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%b %d, %Y at %H:%M UTC")
-    st.info(f"📅 **{updated_at}** — {len(jobs)} jobs across {companies_count} companies")
+    st.info(f"{updated_at} — {len(jobs)} jobs across {companies_count} companies")
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Total jobs", len(jobs))
 col2.metric("Companies", companies_count)
 col3.metric("Last update", datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%b %d, %Y"))
 
-t1, t2 = st.tabs(["📊 Dashboard", "📥 Download"])
+t1, t2 = st.tabs(["Dashboard", "Download"])
 
 with t1:
+    gh_c, lv_c, wd_c = ats_counts.get("Greenhouse",0), ats_counts.get("Lever",0), ats_counts.get("Workday",0)
+    st.subheader("Jobs by ATS")
+    st.bar_chart(pd.DataFrame([{"ATS":"Greenhouse","Jobs":gh_c},{"ATS":"Lever","Jobs":lv_c},{"ATS":"Workday","Jobs":wd_c}]).set_index("ATS"))
+
     st.subheader("Employment Type")
     et = Counter(j["employment_type"] for j in jobs)
     df = pd.DataFrame([{"Type":k,"Count":v} for k,v in et.most_common()])
@@ -90,9 +97,9 @@ with t2:
     count = st.number_input("Number of jobs to download", min_value=1, max_value=len(jobs), value=len(jobs))
     subset = jobs[:count]
     col_j, col_c = st.columns(2)
-    col_j.download_button("📥 Download JSON", json.dumps(subset, indent=2, ensure_ascii=False),
+    col_j.download_button("Download JSON", json.dumps(subset, indent=2, ensure_ascii=False),
                           "job_listings.json", "application/json", use_container_width=True)
-    col_c.download_button("📥 Download CSV", to_csv_string(subset),
+    col_c.download_button("Download CSV", to_csv_string(subset),
                           "job_listings.csv", "text/csv", use_container_width=True)
     st.subheader("Preview (first 10)")
     st.code(json.dumps(jobs[:10], indent=2), language="json")

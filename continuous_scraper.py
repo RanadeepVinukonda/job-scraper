@@ -1,17 +1,17 @@
 """
-Continuous Job Scraper — scheduled polling with delta detection.
+Continuous Job Scraper — multi-ATS support (Greenhouse, Lever, Workday).
 
 Usage:
     python continuous_scraper.py           # Full run (all companies)
-    python continuous_scraper.py --demo    # Demo run (3 companies, ~20-30 jobs)
+    python continuous_scraper.py --demo    # Demo run (6 companies, ~100-200 jobs)
     python continuous_scraper.py --demo --force-new   # Demo + treat all as new
 
 Output:
     data/job_listings.json   — all discovered jobs
-    data/seen_jobs.json      — dedup registry (apply_url → timestamp)
+    data/seen_jobs.json      — dedup registry (apply_url -> timestamp)
 """
 
-import json, time, re, os, sys
+import json, time, re, os, sys, math
 from pathlib import Path
 from datetime import datetime, timezone
 import requests
@@ -22,40 +22,67 @@ DATA_DIR.mkdir(exist_ok=True)
 SEEN_FILE = DATA_DIR / "seen_jobs.json"
 JOBS_FILE = DATA_DIR / "job_listings.json"
 
-COMPANIES = [
+# ── Company Database ──────────────────────────────────────────────
+
+GREENHOUSE_COMPANIES = [
     {"name": "Stripe",       "board": "stripe",      "domain": "stripe.com"},
+    {"name": "Airbnb",       "board": "airbnb",      "domain": "airbnb.com"},
     {"name": "Lyft",         "board": "lyft",        "domain": "lyft.com"},
     {"name": "Pinterest",    "board": "pinterest",   "domain": "pinterest.com"},
     {"name": "Datadog",      "board": "datadog",     "domain": "datadoghq.com"},
-    {"name": "GoDaddy",      "board": "godaddy",     "domain": "godaddy.com"},
     {"name": "Vercel",       "board": "vercel",      "domain": "vercel.com"},
     {"name": "GitLab",       "board": "gitlab",      "domain": "gitlab.com"},
     {"name": "Reddit",       "board": "reddit",      "domain": "reddit.com"},
     {"name": "MongoDB",      "board": "mongodb",     "domain": "mongodb.com"},
     {"name": "Cloudflare",   "board": "cloudflare",  "domain": "cloudflare.com"},
-    {"name": "Okta",         "board": "okta",        "domain": "okta.com"},
-    {"name": "Twilio",       "board": "twilio",      "domain": "twilio.com"},
-    {"name": "Airbnb",       "board": "airbnb",      "domain": "airbnb.com"},
     {"name": "Dropbox",      "board": "dropbox",     "domain": "dropbox.com"},
     {"name": "Instacart",    "board": "instacart",   "domain": "instacart.com"},
     {"name": "Asana",        "board": "asana",       "domain": "asana.com"},
+    {"name": "Coinbase",     "board": "coinbase",    "domain": "coinbase.com"},
+    {"name": "Doordash",     "board": "doordash",    "domain": "doordash.com"},
+    {"name": "HubSpot",      "board": "hubspot",     "domain": "hubspot.com"},
+    {"name": "Webflow",      "board": "webflow",     "domain": "webflow.com"},
+    {"name": "Anthropic",    "board": "anthropic",   "domain": "anthropic.com"},
+    {"name": "Intercom",     "board": "intercom",    "domain": "intercom.com"},
+    {"name": "Okta",         "board": "okta",        "domain": "okta.com"},
+    {"name": "Twilio",       "board": "twilio",      "domain": "twilio.com"},
     {"name": "Affirm",       "board": "affirm",      "domain": "affirm.com"},
     {"name": "Robinhood",    "board": "robinhood",   "domain": "robinhood.com"},
     {"name": "Brex",         "board": "brex",        "domain": "brex.com"},
     {"name": "Carta",        "board": "carta",       "domain": "carta.com"},
     {"name": "Figma",        "board": "figma",       "domain": "figma.com"},
-    {"name": "Intercom",     "board": "intercom",    "domain": "intercom.com"},
     {"name": "Calendly",     "board": "calendly",    "domain": "calendly.com"},
     {"name": "Amplitude",    "board": "amplitude",   "domain": "amplitude.com"},
-    {"name": "Webflow",      "board": "webflow",     "domain": "webflow.com"},
-    {"name": "Anthropic",    "board": "anthropic",   "domain": "anthropic.com"},
     {"name": "Descript",     "board": "descript",    "domain": "descript.com"},
+    {"name": "GoDaddy",      "board": "godaddy",     "domain": "godaddy.com"},
 ]
 
+LEVER_COMPANIES = [
+    {"name": "Palantir",     "board": "palantir",    "domain": "palantir.com"},
+    {"name": "Ro",           "board": "ro",          "domain": "ro.co"},
+    {"name": "Outreach",     "board": "outreach",    "domain": "outreach.io"},
+    {"name": "Toptal",       "board": "toptal",      "domain": "toptal.com"},
+    {"name": "Neon",         "board": "neon",        "domain": "neon.tech"},
+    {"name": "Employ",       "board": "employ",      "domain": "employ.com"},
+    {"name": "LinkedIn",     "board": "linkedin",    "domain": "linkedin.com"},
+]
+
+WORKDAY_COMPANIES = [
+    {"name": "NVIDIA",       "tenant": "nvidia",        "cluster": "wd5",  "site": "NVIDIAExternalCareerSite",           "domain": "nvidia.com"},
+]
+
+ALL_COMPANIES = (
+    [{"ats": "greenhouse", **c} for c in GREENHOUSE_COMPANIES]
+    + [{"ats": "lever", **c} for c in LEVER_COMPANIES]
+    + [{"ats": "workday", **c} for c in WORKDAY_COMPANIES]
+)
+
 DEMO_COMPANIES = [
-    {"name": "Stripe",       "board": "stripe",      "domain": "stripe.com"},
-    {"name": "Figma",        "board": "figma",       "domain": "figma.com"},
-    {"name": "Calendly",     "board": "calendly",    "domain": "calendly.com"},
+    {"ats": "greenhouse", "name": "Stripe",       "board": "stripe",      "domain": "stripe.com"},
+    {"ats": "greenhouse", "name": "Figma",        "board": "figma",       "domain": "figma.com"},
+    {"ats": "lever",      "name": "Palantir",     "board": "palantir",    "domain": "palantir.com"},
+    {"ats": "lever",      "name": "Neon",         "board": "neon",        "domain": "neon.tech"},
+    {"ats": "workday",    "name": "NVIDIA",       "tenant": "nvidia",     "cluster": "wd5", "site": "NVIDIAExternalCareerSite", "domain": "nvidia.com"},
 ]
 
 
@@ -67,8 +94,10 @@ def infer_employment_type(job_title, content=""):
     return 'Full-time'
 
 
-def fetch_company_jobs(company):
-    board = company.get("board") or company["name"].lower().replace(" ", "")
+# ── Greenhouse Scraper ────────────────────────────────────────────
+
+def fetch_greenhouse(company):
+    board = company["board"]
     name = company["name"]
     domain = company.get("domain", "")
     url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
@@ -106,6 +135,157 @@ def fetch_company_jobs(company):
     return results
 
 
+# ── Lever Scraper ─────────────────────────────────────────────────
+
+def fetch_lever(company):
+    board = company["board"]
+    name = company["name"]
+    domain = company.get("domain", "")
+    url = f"https://api.lever.co/v0/postings/{board}?mode=json"
+
+    try:
+        resp = requests.get(url, timeout=15)
+    except Exception:
+        return []
+
+    if resp.status_code != 200:
+        return []
+
+    try:
+        postings = resp.json()
+    except Exception:
+        return []
+
+    if not isinstance(postings, list):
+        return []
+
+    results = []
+    career_page = f"https://{domain}/careers" if domain else ""
+    logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
+
+    for posting in postings:
+        categories = posting.get("categories", {}) or {}
+        results.append({
+            "company_name": name,
+            "company_domain": domain,
+            "career_page": career_page,
+            "job_title": posting.get("text", "Unknown"),
+            "department": categories.get("team", "General"),
+            "location": categories.get("location", "Remote"),
+            "employment_type": infer_employment_type(posting.get("text", ""), categories.get("commitment", "")),
+            "apply_url": posting.get("hostedUrl", ""),
+            "source": "company_careers_page",
+            "ats": "Lever",
+            "logo_url": logo_url,
+        })
+
+    return results
+
+
+# ── Workday Scraper ───────────────────────────────────────────────
+
+WORKDAY_TIMEOUT = 25
+WORKDAY_PAGE_SIZE = 20
+WORKDAY_MAX_PAGES = 50
+
+def _wd_api_url(company):
+    return (f"https://{company['tenant']}.{company['cluster']}.myworkdayjobs.com"
+            f"/wday/cxs/{company['tenant']}/{company['site']}/jobs")
+
+def _wd_apply_url(company, ext_path):
+    base = f"https://{company['tenant']}.{company['cluster']}.myworkdayjobs.com"
+    if ext_path.startswith("/"):
+        return f"{base}/en-US/{company['site']}{ext_path}"
+    return f"{base}/en-US/{company['site']}/job/{ext_path}"
+
+def _wd_extract_department(bullet_fields):
+    for field in bullet_fields:
+        if not re.match(r'^(JR|R|WD|REQ)\d+', field, re.IGNORECASE):
+            return field
+    return "General"
+
+def fetch_workday(company):
+    name = company["name"]
+    domain = company.get("domain", "")
+    api_url = _wd_api_url(company)
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+
+    career_page = f"https://{domain}/careers" if domain else ""
+    logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
+
+    try:
+        resp = requests.post(api_url, json={"limit": WORKDAY_PAGE_SIZE, "offset": 0, "searchText": "", "appliedFacets": {}}, headers=headers, timeout=WORKDAY_TIMEOUT)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+    except Exception as e:
+        return []
+
+    total = data.get("total", 0)
+    if total == 0:
+        return []
+
+    all_postings = list(data.get("jobPostings", []))
+    pages = min(math.ceil(total / WORKDAY_PAGE_SIZE), WORKDAY_MAX_PAGES)
+
+    for page in range(1, pages):
+        try:
+            resp = requests.post(api_url, json={"limit": WORKDAY_PAGE_SIZE, "offset": page * WORKDAY_PAGE_SIZE, "searchText": "", "appliedFacets": {}}, headers=headers, timeout=WORKDAY_TIMEOUT)
+            if resp.status_code == 200:
+                more = resp.json().get("jobPostings", [])
+                all_postings.extend(more)
+        except Exception:
+            pass
+        time.sleep(0.15)
+        if page % 20 == 0:
+            print(f"     ... {page * WORKDAY_PAGE_SIZE}/{total} jobs fetched")
+
+    results = []
+    for posting in all_postings:
+        ext_path = posting.get("externalPath", "")
+        bullet = posting.get("bulletFields", []) or []
+        department = _wd_extract_department(bullet)
+
+        results.append({
+            "company_name": name,
+            "company_domain": domain,
+            "career_page": career_page,
+            "job_title": posting.get("title", "Unknown"),
+            "department": department,
+            "location": posting.get("locationsText", "Remote"),
+            "employment_type": infer_employment_type(posting.get("title", ""), " ".join(bullet)),
+            "apply_url": _wd_apply_url(company, ext_path) if ext_path else "",
+            "source": "company_careers_page",
+            "ats": "Workday",
+            "logo_url": logo_url,
+        })
+
+    return results
+
+
+# ── Dispatcher ────────────────────────────────────────────────────
+
+ATS_FETCHERS = {
+    "greenhouse": fetch_greenhouse,
+    "lever": fetch_lever,
+    "workday": fetch_workday,
+}
+
+
+def fetch_company_jobs(company):
+    ats = company.get("ats", "greenhouse")
+    fetcher = ATS_FETCHERS.get(ats)
+    if not fetcher:
+        return []
+    return fetcher(company)
+
+
+# ── State Management ──────────────────────────────────────────────
+
 def load_seen():
     if SEEN_FILE.exists():
         return json.loads(SEEN_FILE.read_text(encoding="utf-8"))
@@ -128,6 +308,7 @@ OUTPUT_FIELDS = [
     "source", "ats", "logo_url",
 ]
 
+
 def save_jobs(jobs):
     cleaned = []
     for idx, job in enumerate(jobs, 1):
@@ -145,6 +326,8 @@ def verify_url(url):
         return False
 
 
+# ── Main Run ──────────────────────────────────────────────────────
+
 def run(companies, force_new=False):
     seen = load_seen()
     existing = load_jobs()
@@ -153,14 +336,15 @@ def run(companies, force_new=False):
     all_new = []
     all_current_urls = set()
 
+    key = lambda c: c["name"].lower()
+
     print(f"scraping {len(companies)} companies...\n")
 
     for i, company in enumerate(companies, 1):
-        board = company.get("board", company["name"].lower().replace(" ", ""))
-        is_first = board not in seen.get("companies_seen", []) and not force_new
+        is_first = key(company) not in seen.get("companies_seen", []) and not force_new
 
         jobs = fetch_company_jobs(company)
-        print(f"  [{i}/{len(companies)}] {company['name']:15s}  {len(jobs):4d} jobs", end="")
+        print(f"  [{i}/{len(companies)}] {company['name']:20s} {company.get('ats','?'):12s} {len(jobs):4d} jobs", end="")
 
         if not jobs:
             print()
@@ -178,8 +362,8 @@ def run(companies, force_new=False):
                 new_count += 1
 
         if is_first:
-            seen.setdefault("companies_seen", []).append(board)
-            print(f"  (first scrape — archived)")
+            seen.setdefault("companies_seen", []).append(key(company))
+            print(f"  (first scrape - archived)")
         elif new_count > 0:
             print(f"  ({new_count} new)")
         else:
@@ -187,14 +371,11 @@ def run(companies, force_new=False):
 
         time.sleep(0.3)
 
-    # Merge: keep existing + add new
     existing.extend(all_new)
 
-    # Step 1 — mark active/inactive by API presence
     for job in existing:
         job["is_active"] = job["apply_url"] in all_current_urls
 
-    # Step 2 — HEAD-check suspected-dead jobs to confirm
     suspected = [j for j in existing if not j.get("is_active")]
     if suspected:
         print(f"\nVerifying {len(suspected)} removed jobs...")
@@ -221,10 +402,13 @@ if __name__ == "__main__":
         print("=== DEMO MODE ===\n")
         companies = DEMO_COMPANIES
     else:
-        companies = COMPANIES
+        companies = ALL_COMPANIES
 
     jobs = run(companies, force_new=force_new)
 
     active = [j for j in jobs if j.get("is_active", True)]
-    print(f"Active jobs: {len(active)}")
+    gh = [j for j in active if j.get("ats") == "Greenhouse"]
+    lv = [j for j in active if j.get("ats") == "Lever"]
+    wd = [j for j in active if j.get("ats") == "Workday"]
+    print(f"Active jobs: {len(active)} (GH: {len(gh)}, Lever: {len(lv)}, Workday: {len(wd)})")
     print(f"Output: {JOBS_FILE}")
