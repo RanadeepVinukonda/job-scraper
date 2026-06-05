@@ -87,7 +87,10 @@ with t1:
     if not df_jobs.empty:
         st.dataframe(
             df_jobs,
-            column_config={"apply_url": st.column_config.LinkColumn("Apply URL")},
+            column_config={
+                "apply_url": st.column_config.LinkColumn("Apply URL"),
+                "logo_url": st.column_config.LinkColumn("Logo URL"),
+            },
             hide_index=True, use_container_width=True,
         )
 
