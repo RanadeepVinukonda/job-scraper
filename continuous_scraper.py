@@ -99,23 +99,18 @@ def validate_image_url(url: str) -> bool:
 def get_logo_url(domain: str) -> tuple[str, str]:
     """Return a reliable logo URL for the given domain.
     Returns a tuple (url, source) where source is 'primary', 'fallback' or 'default'.
-    If LOGODEV_PUBLISHABLE_KEY and LOGODEV_SECRET_KEY environment variables are set,
-    they are appended as query parameters to the primary logo.dev request.
+    This implementation always uses the provided Logodev API keys to request a logo.
     """
     if not domain:
         return DEFAULT_LOGO, "default"
-    # Base img.logo.dev URL
-    primary_base = f"https://img.logo.dev/{domain}"
-    # Append auth keys if they exist in the environment (no hard‑coded secrets)
-    pk = os.getenv("LOGODEV_PUBLISHABLE_KEY")
-    sk = os.getenv("LOGODEV_SECRET_KEY")
-    if pk and sk:
-        primary = f"{primary_base}?pk={pk}&sk={sk}"
-    else:
-        primary = primary_base
+    # Build the img.logo.dev URL with the publishable and secret keys provided by the user.
+    # Keys are hard‑coded here as the user explicitly supplied them and requested direct use.
+    pk = "pk_Yggm8GxoS8mJfRYHMbOxiQ"
+    sk = "sk_B44KoufQT5ue-bcN5VLQVA"
+    primary = f"https://img.logo.dev/{domain}?pk={pk}&sk={sk}"
     if validate_image_url(primary):
         return primary, "primary"
-    # Fallback to Google favicon service
+    # If the primary endpoint fails, fall back to Google favicons.
     fallback = f"https://www.google.com/s2/favicons?domain={domain}&sz=128"
     if validate_image_url(fallback):
         return fallback, "fallback"
