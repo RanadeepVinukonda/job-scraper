@@ -47,12 +47,32 @@ def is_valid_url(url: str) -> bool:
     except Exception:
         return False
 
+# Browser‑like headers used for all external GET requests (helps avoid 403 blocks)
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://boards.greenhouse.io/",
+}
+
 def follow_redirects(url: str) -> str | None:
-    """Return final URL after following redirects, or None on failure."""
+    """Return final URL after following redirects, or None on failure.
+    Handles 403 responses by returning the original URL (the link is still usable).
+    """
     try:
-        resp = requests.get(url, allow_redirects=True, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        # Short pause to be gentle on the server and avoid rate‑limit
+        time.sleep(0.05)
+        resp = requests.get(url, allow_redirects=True, timeout=10, headers=BROWSER_HEADERS)
         if resp.status_code == 200:
             return resp.url
+        elif resp.status_code == 403:
+            # Greenhouse blocks non‑browser agents; keep the raw URL for the user.
+            logger.info(f"Received 403 for {url}, keeping raw URL")
+            return url
         else:
             logger.warning(f"URL {url} returned status {resp.status_code}")
             return None
