@@ -88,6 +88,7 @@ def fetch_company_jobs(company):
 
     for job in jobs_data:
         departments = job.get("departments", [])
+        gh_jid = job.get("id")
         results.append({
             "company_name": job.get("company_name") or name,
             "company_domain": domain,
@@ -96,7 +97,7 @@ def fetch_company_jobs(company):
             "department": departments[0]["name"] if departments else "General",
             "location": job.get("location", {}).get("name", "Remote"),
             "employment_type": infer_employment_type(job.get("title", ""), job.get("content", "")),
-            "apply_url": job.get("absolute_url", ""),
+            "apply_url": f"https://boards.greenhouse.io/{board}/jobs/{gh_jid}" if gh_jid else job.get("absolute_url", ""),
             "source": "greenhouse",
             "ats": "Greenhouse",
             "logo_url": logo_url,
