@@ -23,7 +23,10 @@ jobs:
         run: python continuous_scraper.py
       - name: Commit updates
         run: |
-          # Use default git identity (no explicit bot configuration)
+          git config user.name "Continuous Scraper"
+          git config user.email "scraper@localhost.local"
           git add data/
-          git diff --staged --quiet || git commit -m "auto: update job listings [skip ci]"
-          git push
+          git diff --staged --quiet || {
+            git commit -m "auto: update job listings [skip ci]"
+            git pull --rebase origin main && git push
+          }
