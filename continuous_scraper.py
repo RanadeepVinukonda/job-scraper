@@ -127,17 +127,15 @@ def validate_image_url(url: str) -> bool:
         return False
 
 def get_logo_url(domain: str) -> tuple[str, str]:
-    """Return a logo.dev URL for the given domain using the supplied API keys.
-    The function *always* returns the primary img.logo.dev URL (with keys) if a domain is provided.
-    If the domain is missing, a placeholder image URL is returned.
+    """Return a logo.dev URL for the given domain using the supplied publishable API key.
+    The function *always* returns the primary img.logo.dev URL with the token when a domain is provided.
+    If the domain is missing or the service fails, a placeholder image URL is used.
     """
     if not domain:
         return DEFAULT_LOGO, "default"
-    # Hard‑coded Logodev keys as requested by the user
+    # Logodev publishable key (secret key is not needed for image fetching)
     pk = "pk_Yggm8GxoS8mJfRYHMbOxiQ"
-    sk = "sk_B44KoufQT5ue-bcN5VLQVA"
-    primary = f"https://img.logo.dev/{domain}?pk={pk}&sk={sk}"
-    # We assume the service works; no validation to avoid additional network calls
+    primary = f"https://img.logo.dev/{domain}?token={pk}"
     return primary, "primary"
 
 
