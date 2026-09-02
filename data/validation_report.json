@@ -1,8 +1,8 @@
 {
-  "jobs_scraped": 6805,
-  "valid_apply_urls": 6805,
+  "jobs_scraped": 6801,
+  "valid_apply_urls": 6801,
   "invalid_apply_urls": 0,
-  "valid_logos_primary": 6805,
+  "valid_logos_primary": 6801,
   "valid_logos_fallback": 0,
   "valid_logos_default": 0
 }
